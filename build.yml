@@ -37,46 +37,59 @@ jobs:
 
       - run: flutter pub get
 
-      - name: Patch llamafu namespace
+      - name: Patch llamafu
         run: |
-          LF=$(ls -d $HOME/.pub-cache/hosted/pub.dev/llamafu-* | head -1)
-          M="$LF/android/src/main/AndroidManifest.xml"
-          NS=""
-          if [ -f "$M" ]; then
-            NS=$(grep -o 'package="[^"]*"' "$M" | head -1 | cut -d'"' -f2)
-            sed -i 's/ package="[^"]*"//' "$M"
-          fi
-          NS=${NS:-com.llamafu.llamafu}
+          python3 - <<'PY'
+          import glob, os, re
+
+          lf = sorted(glob.glob(os.path.expanduser('~/.pub-cache/hosted/pub.dev/llamafu-*')))[0]
+          gradle = lf + '/android/build.gradle'
+          manifest = lf + '/android/src/main/AndroidManifest.xml'
+          ns = 'com.llamafu.llamafu'
+
+          if os.path.exists(manifest):
+              m = open(manifest).read()
+              found = re.search(r'package="([^"]+)"', m)
+              if found:
+                  ns = found.group(1)
+                  m = re.sub(r'\s+package="[^"]+"', '', m, count=1)
+                  open(manifest, 'w').write(m)
+
+          lines = open(gradle).read().split('\n')
+          out = []
+          done = False
+          for line in lines:
+              out.append(line)
+              if not done and re.match(r'^\s*android\s*\{\s*$', line):
+                  out.append("    namespace '%s'" % ns)
+                  done = True
+          if not done:
+              out += ['', 'android {', "    namespace '%s'" % ns, '}']
+          open(gradle, 'w').write('\n'.join(out))
+          print('namespace:', ns, '| inserted into android block:', done)
+          PY
           mkdir -p $HOME/.gradle/init.d
           cat > $HOME/.gradle/init.d/namespace.gradle <<'EOF'
           allprojects {
+              afterEvaluate { }
               plugins.withId('com.android.library') {
                   if (project.name == 'llamafu') {
                       def ext = project.extensions.findByName('android')
                       if (ext != null && !ext.namespace) {
-                          ext.namespace = '__NS__'
+                          ext.namespace = 'com.llamafu.llamafu'
                       }
                   }
               }
           }
           EOF
-          sed -i "s/__NS__/$NS/" $HOME/.gradle/init.d/namespace.gradle
-          {
-            echo "### llamafu diagnostics"
-            echo "namespace: $NS"
-            echo '```'
-            echo "--- llamafu/android/build.gradle ---"
-            cat "$LF/android/build.gradle"
-            echo "--- llamafu/android files ---"
-            ls -la "$LF/android"
-            echo "--- init script ---"
-            cat $HOME/.gradle/init.d/namespace.gradle
-            echo "--- project android dir ---"
-            ls -la android
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
 
-      - run: flutter build apk --release
+      - name: Build APK
+        run: |
+          flutter build apk --release || {
+            echo "=========== LLAMAFU build.gradle ==========="
+            cat -n $(ls -d $HOME/.pub-cache/hosted/pub.dev/llamafu-* | head -1)/android/build.gradle
+            exit 1
+          }
 
       - uses: actions/upload-artifact@v4
         with:
