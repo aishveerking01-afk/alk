@@ -47,26 +47,34 @@ jobs:
             sed -i 's/ package="[^"]*"//' "$M"
           fi
           NS=${NS:-com.llamafu.llamafu}
-          echo "Namespace: $NS"
-          echo "---- llamafu build.gradle: namespace/android lines ----"
-          grep -n "namespace\|android *{" "$LF/android/build.gradle" || true
-          echo "---- llamafu build.gradle: first 40 lines ----"
-          head -40 "$LF/android/build.gradle"
           mkdir -p $HOME/.gradle/init.d
-          cat > $HOME/.gradle/init.d/namespace.gradle <<EOF
+          cat > $HOME/.gradle/init.d/namespace.gradle <<'EOF'
           allprojects {
-              afterEvaluate { p ->
-                  if (p.name == 'llamafu' && p.extensions.findByName('android') != null) {
-                      def ext = p.extensions.findByName('android')
-                      if (ext.namespace == null || ext.namespace.toString().isEmpty()) {
-                          ext.namespace = '$NS'
+              plugins.withId('com.android.library') {
+                  if (project.name == 'llamafu') {
+                      def ext = project.extensions.findByName('android')
+                      if (ext != null && !ext.namespace) {
+                          ext.namespace = '__NS__'
                       }
                   }
               }
           }
           EOF
-          echo "---- init script ----"
-          cat $HOME/.gradle/init.d/namespace.gradle
+          sed -i "s/__NS__/$NS/" $HOME/.gradle/init.d/namespace.gradle
+          {
+            echo "### llamafu diagnostics"
+            echo "namespace: $NS"
+            echo '```'
+            echo "--- llamafu/android/build.gradle ---"
+            cat "$LF/android/build.gradle"
+            echo "--- llamafu/android files ---"
+            ls -la "$LF/android"
+            echo "--- init script ---"
+            cat $HOME/.gradle/init.d/namespace.gradle
+            echo "--- project android dir ---"
+            ls -la android
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - run: flutter build apk --release
 
