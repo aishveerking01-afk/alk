@@ -21,11 +21,21 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install compatible Flutter
+      - name: Install Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.41.5'
           cache: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install required CMake
+        shell: bash
+        run: |
+          set -e
+          sdkmanager --install "cmake;3.18.1"
+          sdkmanager --list_installed | grep "cmake;3.18.1"
 
       - name: Repair Android project
         working-directory: rui
@@ -37,7 +47,7 @@ jobs:
             flutter create --platforms=android --org com.aishveer.rui .
           fi
 
-      - name: Get dependencies
+      - name: Get Flutter dependencies
         working-directory: rui
         run: flutter pub get
 
@@ -50,6 +60,7 @@ jobs:
 
           root = Path.home() / ".pub-cache/hosted/pub.dev"
           files = list(root.glob("llamafu-*/android/build.gradle"))
+
           if not files:
               raise SystemExit("ERROR: llamafu Gradle file not found")
 
@@ -86,15 +97,12 @@ jobs:
           new = "final result = await engine.multimodalComplete(\n        prompt: prompt,"
 
           if old in text:
-              text = text.replace(old, new, 1)
-              file.write_text(text)
-              print("Fixed multimodalComplete prompt argument.")
+              file.write_text(text.replace(old, new, 1))
+              print("Fixed prompt argument.")
           elif new in text:
-              print("multimodalComplete prompt argument already fixed.")
+              print("Prompt argument already fixed.")
           else:
-              raise SystemExit("ERROR: Could not find multimodalComplete call.")
-
-          print("Source patch complete.")
+              raise SystemExit("Could not find multimodalComplete call.")
           PY
 
       - name: Build release APK
