@@ -21,25 +21,23 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install Flutter
+      - name: Install compatible Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.41.5'
           cache: true
 
-      - name: Repair Android project files
+      - name: Repair Android project
         working-directory: rui
         shell: bash
         run: |
           set -e
-
           if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
-            echo "Generating missing Android project files..."
             rm -rf android
             flutter create --platforms=android --org com.aishveer.rui .
           fi
 
-      - name: Get Flutter dependencies
+      - name: Get dependencies
         working-directory: rui
         run: flutter pub get
 
@@ -52,7 +50,6 @@ jobs:
 
           root = Path.home() / ".pub-cache/hosted/pub.dev"
           files = list(root.glob("llamafu-*/android/build.gradle"))
-
           if not files:
               raise SystemExit("ERROR: llamafu Gradle file not found")
 
@@ -71,9 +68,33 @@ jobs:
 
               text = re.sub(r'\$kotlin_version\b', '1.9.24', text)
               text = re.sub(r'\bkotlin_version\b', "'1.9.24'", text)
-
               file.write_text(text)
               print("Patched:", file)
+          PY
+
+      - name: Fix Rui Dart source
+        working-directory: rui
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          file = Path("lib/main.dart")
+          text = file.read_text()
+
+          old = "final result = await engine.multimodalComplete(\n        prompt,"
+          new = "final result = await engine.multimodalComplete(\n        prompt: prompt,"
+
+          if old in text:
+              text = text.replace(old, new, 1)
+              file.write_text(text)
+              print("Fixed multimodalComplete prompt argument.")
+          elif new in text:
+              print("multimodalComplete prompt argument already fixed.")
+          else:
+              raise SystemExit("ERROR: Could not find multimodalComplete call.")
+
+          print("Source patch complete.")
           PY
 
       - name: Build release APK
