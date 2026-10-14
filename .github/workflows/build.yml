@@ -1,4 +1,4 @@
-name: Build New Rui Flutter APK
+name: Build New Rui APK
 
 on:
   workflow_dispatch:
@@ -12,11 +12,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Download repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Java
-        uses: actions/setup-java@v4
+      - name: Set up Java
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -27,60 +27,63 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Find the new Flutter app
+      - name: Repair Android project files
+        working-directory: rui
         shell: bash
         run: |
           set -e
-          mkdir -p /tmp/rui-source
 
-          # First search existing repository files.
-          APP_DIR="$(find . -type f -name pubspec.yaml \
-            -not -path './.git/*' \
-            -not -path './.dart_tool/*' \
-            -print -quit | xargs -r dirname)"
-
-          # If needed, search ZIPs, excluding the known old Android ZIP.
-          if [ -z "$APP_DIR" ]; then
-            while IFS= read -r -d '' zipfile; do
-              case "$(basename "$zipfile")" in
-                Rui-Android-Offline-AI.zip) continue ;;
-              esac
-
-              target="/tmp/rui-source/$(basename "$zipfile" .zip)"
-              mkdir -p "$target"
-              unzip -oq "$zipfile" -d "$target"
-
-              APP_DIR="$(find "$target" -type f -name pubspec.yaml \
-                -print -quit | xargs -r dirname)"
-
-              if [ -n "$APP_DIR" ]; then
-                break
-              fi
-            done < <(find . -type f -iname '*.zip' \
-              -not -path './.git/*' -print0)
+          if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
+            echo "Repairing missing Android project files..."
+            rm -rf android
+            flutter create --platforms=android --org com.aishveer.rui .
           fi
 
-          if [ -z "$APP_DIR" ] || [ ! -f "$APP_DIR/pubspec.yaml" ]; then
-            echo "ERROR: New Flutter app not found."
-            echo "Upload the NEW app source or ZIP to this repository."
-            find . -maxdepth 4 -type f | sort | head -200
+          if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
+            echo "ERROR: Android Gradle files were not generated."
             exit 1
           fi
 
-          echo "Building Flutter app from: $APP_DIR"
-          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
-
-      - name: Get dependencies
+      - name: Get Flutter dependencies
+        working-directory: rui
         run: flutter pub get
-        working-directory: ${{ env.APP_DIR }}
+
+      - name: Fix llamafu namespace
+        working-directory: rui
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          cache = Path.home() / ".pub-cache/hosted/pub.dev"
+          plugins = list(cache.glob("llamafu-*/android/build.gradle"))
+
+          if not plugins:
+              raise SystemExit("llamafu Android Gradle file not found")
+
+          for file in plugins:
+              content = file.read_text()
+              if not re.search(r'(?m)^\s*namespace\s+', content):
+                  content, count = re.subn(
+                      r'(?m)^(\s*android\s*\{)',
+                      r"\1\n    namespace 'com.example.llamafu'",
+                      content,
+                      count=1
+                  )
+                  if count == 0:
+                      raise SystemExit("Could not patch llamafu namespace")
+                  file.write_text(content)
+              print("Checked:", file)
+          PY
 
       - name: Build release APK
+        working-directory: rui
         run: flutter build apk --release
-        working-directory: ${{ env.APP_DIR }}
 
-      - name: Upload new APK
+      - name: Upload NEW Rui APK
         uses: actions/upload-artifact@v4
         with:
           name: NEW-Rui-APK
-          path: ${{ env.APP_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          path: rui/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
