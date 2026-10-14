@@ -1,36 +1,103 @@
 ```yaml
-      - name: FORCE FIX llamafu namespace
+name: Build Rui APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate Android project
         working-directory: rui
+        run: flutter create --org com.rui --project-name rui --platforms android .
+
+      - name: Apply Rui manifest
+        working-directory: rui
+        run: cp manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+
+      - name: Set minSdk
+        working-directory: rui
+        run: sed -i 's/flutter.minSdkVersion/24/g' android/app/build.gradle*
+
+      - name: Get dependencies
+        working-directory: rui
+        run: flutter pub get
+
+      - name: Fix llamafu namespace
         shell: bash
         run: |
-          FILE="$HOME/.pub-cache/hosted/pub.dev/llamafu-0.1.0/android/build.gradle"
+          set -e
+          FILE="rui/.dart_tool/package_config.json"
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
 
-          echo "Checking: $FILE"
-          test -f "$FILE" || {
-            echo "ERROR: llamafu file not found"
-            exit 1
-          }
+          with open("rui/.dart_tool/package_config.json", encoding="utf-8") as f:
+              config = json.load(f)
 
-          if ! grep -q 'namespace' "$FILE"; then
-            sed -i "/^android[[:space:]]*{/a\\    namespace 'com.llamafu.llamafu'" "$FILE"
-          fi
+          package = next((p for p in config["packages"] if p["name"] == "llamafu"), None)
+          if package is None:
+              sys.exit("ERROR: llamafu is not in package_config.json")
 
-          cat "$FILE"
-          grep -q 'namespace' "$FILE" || {
-            echo "ERROR: Namespace patch failed"
-            exit 1
-          }
+          root_uri = package["rootUri"]
+          if root_uri.startswith("file:"):
+              from urllib.parse import urlparse, unquote
+              root = unquote(urlparse(root_uri).path)
+          else:
+              root = os.path.normpath(os.path.join("rui/.dart_tool", root_uri))
+
+          gradle = os.path.join(root, "android", "build.gradle")
+          if not os.path.isfile(gradle):
+              sys.exit("ERROR: Plugin Gradle file not found: " + gradle)
+
+          with open(gradle, encoding="utf-8") as f:
+              content = f.read()
+
+          import re
+          if not re.search(r'(?m)^\s*namespace\s+', content):
+              content, count = re.subn(
+                  r'(?m)^(\s*)android\s*\{',
+                  r"\1android {\n\1    namespace 'com.llamafu.llamafu'",
+                  content,
+                  count=1
+              )
+              if count != 1:
+                  sys.exit("ERROR: Could not insert namespace into " + gradle)
+              with open(gradle, "w", encoding="utf-8") as f:
+                  f.write(content)
+
+          print("Patched plugin:", gradle)
+          print("Namespace:", "com.llamafu.llamafu")
+          PY
+
+      - name: Build release APK
+        working-directory: rui
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: rui-apk
+          path: rui/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
 ```
-
-**Important:** Your workflow already has `defaults.run.working-directory: rui`. The explicit `working-directory: rui` above may be redundant, but it is valid for a step and ensures the intended project directory is used.
-
-Then keep your existing `Build release APK` step after this one.
-
-### If it fails again
-
-Open the newest GitHub Actions run and check whether **FORCE FIX llamafu namespace** appears before the build step.
-
-- If it doesn't appear, you're running an old workflow or editing the wrong YAML file.
-- If it appears, copy the output of that step and send it to me.
-
-We need that output to determine why the patch isn't taking effect; the repeated Gradle error alone doesn't show whether the updated workflow ran.
