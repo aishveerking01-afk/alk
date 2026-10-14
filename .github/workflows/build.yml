@@ -1,45 +1,36 @@
-name: Build Rui APK
-
-on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
+```yaml
+      - name: FORCE FIX llamafu namespace
         working-directory: rui
-    steps:
-      - uses: actions/checkout@v4
+        shell: bash
+        run: |
+          FILE="$HOME/.pub-cache/hosted/pub.dev/llamafu-0.1.0/android/build.gradle"
 
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+          echo "Checking: $FILE"
+          test -f "$FILE" || {
+            echo "ERROR: llamafu file not found"
+            exit 1
+          }
 
-      - uses: subosito/flutter-action@v2
-        with:
-          channel: stable
+          if ! grep -q 'namespace' "$FILE"; then
+            sed -i "/^android[[:space:]]*{/a\\    namespace 'com.llamafu.llamafu'" "$FILE"
+          fi
 
-      - name: Generate Android project files
-        run: flutter create --org com.rui --project-name rui --platforms android .
+          cat "$FILE"
+          grep -q 'namespace' "$FILE" || {
+            echo "ERROR: Namespace patch failed"
+            exit 1
+          }
+```
 
-      - name: Apply Rui manifest
-        run: cp manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+**Important:** Your workflow already has `defaults.run.working-directory: rui`. The explicit `working-directory: rui` above may be redundant, but it is valid for a step and ensures the intended project directory is used.
 
-      - name: Set minSdk to 24
-        run: sed -i 's/flutter.minSdkVersion/24/' android/app/build.gradle*
+Then keep your existing `Build release APK` step after this one.
 
-      - name: Define kotlin_version for llamafu
-        run: echo "kotlin_version=2.1.0" >> android/gradle.properties
+### If it fails again
 
-      - run: flutter pub get
+Open the newest GitHub Actions run and check whether **FORCE FIX llamafu namespace** appears before the build step.
 
-      - run: flutter build apk --release
+- If it doesn't appear, you're running an old workflow or editing the wrong YAML file.
+- If it appears, copy the output of that step and send it to me.
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rui-apk
-          path: rui/build/app/outputs/flutter-apk/app-release.apk
+We need that output to determine why the patch isn't taking effect; the repeated Gradle error alone doesn't show whether the updated workflow ran.
