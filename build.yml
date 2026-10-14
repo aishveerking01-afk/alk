@@ -32,7 +32,26 @@ jobs:
       - name: Set minSdk to 24
         run: sed -i 's/flutter.minSdkVersion/24/' android/app/build.gradle*
 
+      - name: Define kotlin_version for llamafu
+        run: echo "kotlin_version=2.1.0" >> android/gradle.properties
+
       - run: flutter pub get
+
+      - name: Patch llamafu namespace
+        run: |
+          LF=$(ls -d $HOME/.pub-cache/hosted/pub.dev/llamafu-* | head -1)
+          echo "Patching $LF"
+          MANIFEST="$LF/android/src/main/AndroidManifest.xml"
+          NS=""
+          if [ -f "$MANIFEST" ]; then
+            NS=$(grep -o 'package="[^"]*"' "$MANIFEST" | head -1 | cut -d'"' -f2)
+            sed -i 's/ package="[^"]*"//' "$MANIFEST"
+          fi
+          NS=${NS:-com.llamafu.llamafu}
+          echo "Using namespace $NS"
+          sed -i "0,/android *{/s//android {\n    namespace '$NS'/" "$LF/android/build.gradle"
+          echo "---- patched build.gradle ----"
+          cat "$LF/android/build.gradle"
 
       - run: flutter build apk --release
 
