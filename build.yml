@@ -41,6 +41,7 @@ jobs:
         run: |
           LF=$(ls -d $HOME/.pub-cache/hosted/pub.dev/llamafu-* | head -1)
           echo "Patching $LF"
+          GRADLE="$LF/android/build.gradle"
           MANIFEST="$LF/android/src/main/AndroidManifest.xml"
           NS=""
           if [ -f "$MANIFEST" ]; then
@@ -48,10 +49,14 @@ jobs:
             sed -i 's/ package="[^"]*"//' "$MANIFEST"
           fi
           NS=${NS:-com.llamafu.llamafu}
-          echo "Using namespace $NS"
-          sed -i "0,/android *{/s//android {\n    namespace '$NS'/" "$LF/android/build.gradle"
+          echo "Using namespace: $NS"
+          if ! grep -q "namespace" "$GRADLE"; then
+            printf "\nandroid {\n    namespace '%s'\n}\n" "$NS" >> "$GRADLE"
+          fi
           echo "---- patched build.gradle ----"
-          cat "$LF/android/build.gradle"
+          cat -n "$GRADLE"
+          echo "---- manifest ----"
+          cat "$MANIFEST" || true
 
       - run: flutter build apk --release
 
