@@ -1,0 +1,26 @@
+name: rui
+description: Rui AI - a local-first, fully offline AI assistant for Android.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  llamafu: ^0.1.0
+  speech_to_text: ^7.0.0
+  dio: ^5.7.0
+  image_picker: ^1.1.2
+  path_provider: ^2.1.5
+  google_fonts: ^6.2.1
+  lucide_icons: ^0.257.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
