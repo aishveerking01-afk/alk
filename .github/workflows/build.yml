@@ -16,7 +16,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
@@ -34,54 +34,53 @@ jobs:
           set -e
 
           if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
-            echo "Repairing missing Android project files..."
+            echo "Generating missing Android project files..."
             rm -rf android
             flutter create --platforms=android --org com.aishveer.rui .
-          fi
-
-          if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
-            echo "ERROR: Android Gradle files were not generated."
-            exit 1
           fi
 
       - name: Get Flutter dependencies
         working-directory: rui
         run: flutter pub get
 
-      - name: Fix llamafu namespace
-        working-directory: rui
+      - name: Fix llamafu Gradle configuration
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
           import re
 
-          cache = Path.home() / ".pub-cache/hosted/pub.dev"
-          plugins = list(cache.glob("llamafu-*/android/build.gradle"))
+          root = Path.home() / ".pub-cache/hosted/pub.dev"
+          files = list(root.glob("llamafu-*/android/build.gradle"))
 
-          if not plugins:
-              raise SystemExit("llamafu Android Gradle file not found")
+          if not files:
+              raise SystemExit("ERROR: llamafu Gradle file not found")
 
-          for file in plugins:
-              content = file.read_text()
-              if not re.search(r'(?m)^\s*namespace\s+', content):
-                  content, count = re.subn(
+          for file in files:
+              text = file.read_text()
+
+              if not re.search(r'(?m)^\s*namespace\s+', text):
+                  text, count = re.subn(
                       r'(?m)^(\s*android\s*\{)',
                       r"\1\n    namespace 'com.example.llamafu'",
-                      content,
+                      text,
                       count=1
                   )
                   if count == 0:
-                      raise SystemExit("Could not patch llamafu namespace")
-                  file.write_text(content)
-              print("Checked:", file)
+                      raise SystemExit("Could not add llamafu namespace")
+
+              text = re.sub(r'\$kotlin_version\b', '1.9.24', text)
+              text = re.sub(r'\bkotlin_version\b', "'1.9.24'", text)
+
+              file.write_text(text)
+              print("Patched:", file)
           PY
 
       - name: Build release APK
         working-directory: rui
         run: flutter build apk --release
 
-      - name: Upload NEW Rui APK
+      - name: Upload new Rui APK
         uses: actions/upload-artifact@v4
         with:
           name: NEW-Rui-APK
