@@ -1,22 +1,86 @@
-name: Build Rui APK
+name: Build New Rui Flutter APK
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+      - master
 
 jobs:
-  check:
+  build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repository
+      - name: Download repository
         uses: actions/checkout@v4
 
-      - name: Validate workflow
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Find the new Flutter app
+        shell: bash
         run: |
-          echo "YAML syntax is valid."
-          echo "Repository files:"
-          ls -la
-          echo "Workflow validation complete."
-```
+          set -e
+          mkdir -p /tmp/rui-source
+
+          # First search existing repository files.
+          APP_DIR="$(find . -type f -name pubspec.yaml \
+            -not -path './.git/*' \
+            -not -path './.dart_tool/*' \
+            -print -quit | xargs -r dirname)"
+
+          # If needed, search ZIPs, excluding the known old Android ZIP.
+          if [ -z "$APP_DIR" ]; then
+            while IFS= read -r -d '' zipfile; do
+              case "$(basename "$zipfile")" in
+                Rui-Android-Offline-AI.zip) continue ;;
+              esac
+
+              target="/tmp/rui-source/$(basename "$zipfile" .zip)"
+              mkdir -p "$target"
+              unzip -oq "$zipfile" -d "$target"
+
+              APP_DIR="$(find "$target" -type f -name pubspec.yaml \
+                -print -quit | xargs -r dirname)"
+
+              if [ -n "$APP_DIR" ]; then
+                break
+              fi
+            done < <(find . -type f -iname '*.zip' \
+              -not -path './.git/*' -print0)
+          fi
+
+          if [ -z "$APP_DIR" ] || [ ! -f "$APP_DIR/pubspec.yaml" ]; then
+            echo "ERROR: New Flutter app not found."
+            echo "Upload the NEW app source or ZIP to this repository."
+            find . -maxdepth 4 -type f | sort | head -200
+            exit 1
+          fi
+
+          echo "Building Flutter app from: $APP_DIR"
+          echo "APP_DIR=$APP_DIR" >> "$GITHUB_ENV"
+
+      - name: Get dependencies
+        run: flutter pub get
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Build release APK
+        run: flutter build apk --release
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Upload new APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEW-Rui-APK
+          path: ${{ env.APP_DIR }}/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
