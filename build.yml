@@ -39,37 +39,34 @@ jobs:
 
       - name: Patch llamafu namespace
         run: |
-          python3 - <<'PY'
-          import glob, os, re, sys
-
-          lf = sorted(glob.glob(os.path.expanduser('~/.pub-cache/hosted/pub.dev/llamafu-*')))[0]
-          gradle = lf + '/android/build.gradle'
-          manifest = lf + '/android/src/main/AndroidManifest.xml'
-          ns = 'com.llamafu.llamafu'
-
-          if os.path.exists(manifest):
-              m = open(manifest).read()
-              found = re.search(r'package="([^"]+)"', m)
-              if found:
-                  ns = found.group(1)
-                  m = re.sub(r'\s+package="[^"]+"', '', m, count=1)
-                  open(manifest, 'w').write(m)
-
-          s = open(gradle).read()
-          block = re.search(r'\bandroid\s*\{', s)
-          if block:
-              s = s[:block.end()] + "\n    namespace '%s'" % ns + s[block.end():]
-          else:
-              s += "\nandroid {\n    namespace '%s'\n}\n" % ns
-          open(gradle, 'w').write(s)
-
-          check = open(gradle).read()
-          if "namespace '%s'" % ns not in check:
-              print('PATCH FAILED')
-              sys.exit(1)
-          print('Patched', gradle, 'with namespace', ns)
-          print(check)
-          PY
+          LF=$(ls -d $HOME/.pub-cache/hosted/pub.dev/llamafu-* | head -1)
+          M="$LF/android/src/main/AndroidManifest.xml"
+          NS=""
+          if [ -f "$M" ]; then
+            NS=$(grep -o 'package="[^"]*"' "$M" | head -1 | cut -d'"' -f2)
+            sed -i 's/ package="[^"]*"//' "$M"
+          fi
+          NS=${NS:-com.llamafu.llamafu}
+          echo "Namespace: $NS"
+          echo "---- llamafu build.gradle: namespace/android lines ----"
+          grep -n "namespace\|android *{" "$LF/android/build.gradle" || true
+          echo "---- llamafu build.gradle: first 40 lines ----"
+          head -40 "$LF/android/build.gradle"
+          mkdir -p $HOME/.gradle/init.d
+          cat > $HOME/.gradle/init.d/namespace.gradle <<EOF
+          allprojects {
+              afterEvaluate { p ->
+                  if (p.name == 'llamafu' && p.extensions.findByName('android') != null) {
+                      def ext = p.extensions.findByName('android')
+                      if (ext.namespace == null || ext.namespace.toString().isEmpty()) {
+                          ext.namespace = '$NS'
+                      }
+                  }
+              }
+          }
+          EOF
+          echo "---- init script ----"
+          cat $HOME/.gradle/init.d/namespace.gradle
 
       - run: flutter build apk --release
 
