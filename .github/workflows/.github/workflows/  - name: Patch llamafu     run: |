@@ -1,0 +1,59 @@
+```yaml
+      - name: Patch llamafu namespace
+        shell: bash
+        run: |
+          set -e
+
+          FILE="$HOME/.pub-cache/hosted/pub.dev/llamafu-0.1.0/android/build.gradle"
+
+          if [ ! -f "$FILE" ]; then
+            echo "Trying to locate llamafu..."
+            find "$HOME/.pub-cache/hosted" -path "*/llamafu-*/android/build.gradle" -print
+            FILE=$(find "$HOME/.pub-cache/hosted/pub.dev" -path "*/llamafu-*/android/build.gradle" -print -quit)
+          fi
+
+          if [ -z "$FILE" ] || [ ! -f "$FILE" ]; then
+            echo "ERROR: llamafu build.gradle not found"
+            exit 1
+          fi
+
+          python3 - "$FILE" <<'PY'
+          import re
+          import sys
+
+          path = sys.argv[1]
+
+          with open(path, encoding="utf-8") as f:
+              content = f.read()
+
+          if re.search(r'(?m)^\s*namespace\s*[=( ]', content):
+              print("Namespace already exists.")
+          else:
+              pattern = r'(?m)^([ \t]*)android[ \t]*\{'
+              match = re.search(pattern, content)
+
+              if not match:
+                  print("ERROR: No android { block found.")
+                  sys.exit(1)
+
+              namespace = "com.llamafu.llamafu"
+              insertion = match.group(0) + "\n" + match.group(1) + "    namespace '" + namespace + "'"
+              content = content[:match.start()] + insertion + content[match.end():]
+
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(content)
+
+              print("Namespace added:", namespace)
+
+          with open(path, encoding="utf-8") as f:
+              content = f.read()
+
+          if not re.search(r'(?m)^\s*namespace\s*[=( ]', content):
+              sys.exit("ERROR: Namespace verification failed.")
+
+          print("Verified plugin file:", path)
+          PY
+
+          echo "===== PATCHED GRADLE FILE ====="
+          grep -n -A 5 -B 2 "namespace" "$FILE"
+```
