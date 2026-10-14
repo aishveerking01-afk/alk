@@ -50,6 +50,39 @@ jobs:
         working-directory: rui
         run: flutter pub get
 
+      - name: Restore llamafu llama.cpp submodule
+        shell: bash
+        run: |
+          set -e
+
+          CACHE="$HOME/.pub-cache/hosted"
+          DEST="$CACHE/llama.cpp"
+          TEMP="/tmp/llamafu-source"
+
+          echo "Downloading Llamafu source with submodules..."
+
+          git clone --depth 1 --recurse-submodules \
+            https://github.com/neul-labs/llamafu.git \
+            "$TEMP"
+
+          if [ ! -f "$TEMP/llama.cpp/CMakeLists.txt" ]; then
+            echo "ERROR: llama.cpp submodule was not found in the source repository."
+            echo "Available source directories:"
+            find "$TEMP" -maxdepth 3 -name CMakeLists.txt
+            exit 1
+          fi
+
+          mkdir -p "$CACHE"
+          rm -rf "$DEST"
+          cp -a "$TEMP/llama.cpp" "$DEST"
+
+          if [ ! -f "$DEST/CMakeLists.txt" ]; then
+            echo "ERROR: llama.cpp was not installed in the expected location."
+            exit 1
+          fi
+
+          echo "llama.cpp source restored successfully."
+
       - name: Fix llamafu Gradle configuration
         shell: bash
         run: |
@@ -64,23 +97,31 @@ jobs:
               raise SystemExit("ERROR: llamafu Gradle file not found")
 
           for file in files:
-              text = file.read_text()
+              content = file.read_text()
 
-              if not re.search(r'(?m)^\s*namespace\s+', text):
-                  text, count = re.subn(
+              if not re.search(r'(?m)^\s*namespace\s+', content):
+                  content, count = re.subn(
                       r'(?m)^(\s*android\s*\{)',
                       r"\1\n    namespace 'com.example.llamafu'",
-                      text,
+                      content,
                       count=1
                   )
 
                   if count == 0:
                       raise SystemExit("Could not add llamafu namespace")
 
-              text = re.sub(r'\$kotlin_version\b', '1.9.24', text)
-              text = re.sub(r'\bkotlin_version\b', "'1.9.24'", text)
+              content = re.sub(
+                  r'\$kotlin_version\b',
+                  '1.9.24',
+                  content
+              )
+              content = re.sub(
+                  r'\bkotlin_version\b',
+                  "'1.9.24'",
+                  content
+              )
 
-              file.write_text(text)
+              file.write_text(content)
               print("Patched:", file)
           PY
 
@@ -92,21 +133,36 @@ jobs:
           from pathlib import Path
 
           file = Path("lib/main.dart")
-          text = file.read_text()
+          content = file.read_text()
 
           old = "final result = await engine.multimodalComplete(\n        prompt,"
           new = "final result = await engine.multimodalComplete(\n        prompt: prompt,"
 
-          if old in text:
-              file.write_text(text.replace(old, new, 1))
+          if old in content:
+              file.write_text(content.replace(old, new, 1))
               print("Fixed prompt argument.")
-          elif new in text:
+          elif new in content:
               print("Prompt argument already fixed.")
           else:
               raise SystemExit(
-                  "Could not find multimodalComplete call in lib/main.dart"
+                  "ERROR: Could not find multimodalComplete call."
               )
           PY
+
+      - name: Clean previous build
+        working-directory: rui
+        run: flutter clean
+
+      - name: Get Flutter dependencies again
+        working-directory: rui
+        run: flutter pub get
+
+      - name: Verify llama.cpp source
+        shell: bash
+        run: |
+          set -e
+          test -f "$HOME/.pub-cache/hosted/llama.cpp/CMakeLists.txt"
+          echo "llama.cpp source is present."
 
       - name: Build release APK
         working-directory: rui
