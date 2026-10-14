@@ -1,44 +1,280 @@
 
-      - name: Fix Android POSIX memory advice constants
+name: Build New Rui APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          cache: true
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: |
+            cmake;3.18.1
+          accept-android-sdk-licenses: true
+
+      - name: Repair Android project
+        working-directory: rui
         shell: bash
         run: |
           set -e
 
-          LLAMA_MMAP="$HOME/.pub-cache/hosted/llama.cpp/src/llama-mmap.cpp"
+          if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
+            rm -rf android
+            flutter create --platforms=android --org com.aishveer.rui .
+          fi
 
-          if [ ! -f "$LLAMA_MMAP" ]; then
-            echo "ERROR: llama-mmap.cpp not found at $LLAMA_MMAP"
-            find "$HOME/.pub-cache/hosted" -path '*/src/llama-mmap.cpp' -print
+      - name: Get Flutter dependencies
+        working-directory: rui
+        run: flutter pub get
+
+      - name: Restore llamafu llama.cpp source
+        shell: bash
+        run: |
+          set -e
+
+          TEMP="/tmp/llamafu-source"
+          CACHE="$HOME/.pub-cache/hosted"
+
+          git clone --depth 1 --recurse-submodules \
+            https://github.com/neul-labs/llamafu.git "$TEMP"
+
+          if [ ! -f "$TEMP/llama.cpp/CMakeLists.txt" ]; then
+            echo "ERROR: llama.cpp source was not found."
+            find "$TEMP" -maxdepth 4 -name CMakeLists.txt
             exit 1
           fi
 
+          mkdir -p "$CACHE"
+          rm -rf "$CACHE/llama.cpp"
+          cp -a "$TEMP/llama.cpp" "$CACHE/llama.cpp"
+
+          test -f "$CACHE/llama.cpp/CMakeLists.txt"
+          echo "llama.cpp source restored."
+
+      - name: Fix Android POSIX constants
+        shell: bash
+        run: |
+          set -e
+
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
-          p = Path.home() / ".pub-cache/hosted/llama.cpp/src/llama-mmap.cpp"
-          source = p.read_text()
+          file = Path.home() / ".pub-cache/hosted/llama.cpp/src/llama-mmap.cpp"
+
+          if not file.is_file():
+              raise SystemExit(f"ERROR: Source file not found: {file}")
+
+          source = file.read_text()
 
           compatibility = """
-          // Compatibility definitions for Android NDK.
+          // Android NDK compatibility for POSIX memory advice constants.
           #ifndef POSIX_MADV_RANDOM
           #define POSIX_MADV_RANDOM 1
           #endif
+
           #ifndef POSIX_MADV_WILLNEED
           #define POSIX_MADV_WILLNEED 3
           #endif
 
           """
 
-          if "Compatibility definitions for Android NDK." not in source:
-              marker = "// TODO: consider moving to llama-impl.h if needed in more places"
-              if marker not in source:
-                  raise SystemExit("ERROR: Could not find a safe insertion point.")
-              source = source.replace(marker, compatibility + marker, 1)
-              p.write_text(source)
+          if "Android NDK compatibility for POSIX memory advice constants." not in source:
+              match = re.search(r'(?m)^#include\\b', source)
+              if not match:
+                  raise SystemExit("ERROR: Could not find includes in llama-mmap.cpp")
 
-          print("Android POSIX compatibility patch applied.")
+              source = source[:match.start()] + compatibility + source[match.start():]
+              file.write_text(source)
+
+          updated = file.read_text()
+
+          for constant in ("POSIX_MADV_RANDOM", "POSIX_MADV_WILLNEED"):
+              if constant not in updated:
+                  raise SystemExit(f"ERROR: Patch verification failed for {constant}")
+
+          print("POSIX compatibility patch applied.")
           PY
 
-          # Remove cached native build files so CMake reconfigures.
-          find "$HOME/.pub-cache/hosted/pub.dev/llamafu-0.1.0/android" \
-            -type d -name .cxx -prune -exec rm -rf {} +
+      - name: Fix llamafu Gradle configuration
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path.home() / ".pub-cache/hosted/pub.dev"
+          files = list(root.glob("llamafu-*/android/build.gradle"))
+
+          if not files:
+              raise SystemExit("ERROR: llamafu Gradle file not found")
+
+          for file in files:
+              content = file.read_text()
+
+              if not re.search(r'(?m)^\\s*namespace\\s+', content):
+                  content, count = re.subn(
+                      r'(?m)^(\\s*android\\s*\\{)',
+                      r"\\1\n    namespace 'com.example.llamafu'",
+                      content,
+                      count=1
+                  )
+                  if count == 0:
+                      raise SystemExit("ERROR: Could not add llamafu namespace")
+
+              content = re.sub(r'\\$kotlin_version\\b', '1.9.24', content)
+              content = re.sub(r'\\bkotlin_version\\b', "'1.9.24'", content)
+
+              file.write_text(content)
+              print("Patched:", file)
+          PY
+
+      - name: Fix native CMake linker flags
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          package_root = Path.home() / ".pub-cache/hosted/pub.dev"
+          packages = list(package_root.glob("llamafu-*/android"))
+
+          if not packages:
+              raise SystemExit("ERROR: llamafu Android source not found")
+
+          roots = packages + [
+              Path.home() / ".pub-cache/hosted/llama.cpp"
+          ]
+
+          pattern = re.compile(r'(?<![A-Za-z0-9_-])-static(?![A-Za-z0-9_-])')
+          changed = 0
+
+          for root in roots:
+              if not root.exists():
+                  continue
+
+              for file in root.rglob("*"):
+                  if not file.is_file():
+                      continue
+
+                  if file.name != "CMakeLists.txt" and file.suffix != ".cmake":
+                      continue
+
+                  try:
+                      original = file.read_text()
+                  except (UnicodeDecodeError, OSError):
+                      continue
+
+                  updated, count = pattern.subn("", original)
+
+                  if count:
+                      file.write_text(updated)
+                      changed += count
+                      print(f"Removed {count} standalone -static flag(s) from {file}")
+
+          print(f"Native linker flag patches applied: {changed}")
+          PY
+
+      - name: Fix Rui Dart source
+        working-directory: rui
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          file = Path("lib/main.dart")
+
+          if not file.is_file():
+              raise SystemExit("ERROR: rui/lib/main.dart not found")
+
+          content = file.read_text()
+
+          old = "final result = await engine.multimodalComplete(\n        prompt,"
+          new = "final result = await engine.multimodalComplete(\n        prompt: prompt,"
+
+          if old in content:
+              file.write_text(content.replace(old, new, 1))
+              print("Fixed prompt argument.")
+          elif new in content:
+              print("Prompt argument already fixed.")
+          else:
+              raise SystemExit(
+                  "ERROR: Could not find expected multimodalComplete call in lib/main.dart"
+              )
+          PY
+
+      - name: Clean previous native and Flutter builds
+        working-directory: rui
+        shell: bash
+        run: |
+          set -e
+
+          flutter clean
+
+          PACKAGE_ROOT="$HOME/.pub-cache/hosted/pub.dev"
+
+          find "$PACKAGE_ROOT" \
+            -path '*/llamafu-*/android/.cxx' \
+            -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+          find "$PACKAGE_ROOT" \
+            -path '*/llamafu-*/android/build' \
+            -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+          echo "Old native build cache cleared."
+
+      - name: Get Flutter dependencies again
+        working-directory: rui
+        run: flutter pub get
+
+      - name: Verify Android compatibility patch
+        shell: bash
+        run: |
+          set -e
+
+          FILE="$HOME/.pub-cache/hosted/llama.cpp/src/llama-mmap.cpp"
+
+          grep -q 'POSIX_MADV_RANDOM' "$FILE"
+          grep -q 'POSIX_MADV_WILLNEED' "$FILE"
+
+          echo "Android POSIX patch verified."
+
+      - name: Build release APK
+        working-directory: rui
+        run: flutter build apk --release
+
+      - name: Upload new Rui APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NEW-Rui-APK
+          path: rui/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
