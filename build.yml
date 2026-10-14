@@ -1,3 +1,4 @@
+```yaml
 name: Build Rui APK
 
 on:
@@ -8,18 +9,23 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     defaults:
       run:
         working-directory: rui
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - uses: subosito/flutter-action@v2
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: stable
 
@@ -30,68 +36,80 @@ jobs:
         run: cp manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
       - name: Set minSdk to 24
-        run: sed -i 's/flutter.minSdkVersion/24/' android/app/build.gradle*
+        run: sed -i 's/flutter.minSdkVersion/24/g' android/app/build.gradle*
 
-      - name: Define kotlin_version for llamafu
+      - name: Define Kotlin version
         run: echo "kotlin_version=2.1.0" >> android/gradle.properties
 
-      - run: flutter pub get
+      - name: Get Flutter dependencies
+        run: flutter pub get
 
-      - name: Patch llamafu
+      - name: Fix llamafu namespace
+        shell: bash
         run: |
           python3 - <<'PY'
-          import glob, os, re
+          import glob
+          import os
+          import re
+          import sys
 
-          lf = sorted(glob.glob(os.path.expanduser('~/.pub-cache/hosted/pub.dev/llamafu-*')))[0]
-          gradle = lf + '/android/build.gradle'
-          manifest = lf + '/android/src/main/AndroidManifest.xml'
-          ns = 'com.llamafu.llamafu'
+          cache = os.path.expanduser("~/.pub-cache/hosted")
+          matches = (
+              glob.glob(cache + "/pub.dev/llamafu-*")
+              + glob.glob(cache + "/pub.dartlang.org/llamafu-*")
+          )
 
-          if os.path.exists(manifest):
-              m = open(manifest).read()
-              found = re.search(r'package="([^"]+)"', m)
-              if found:
-                  ns = found.group(1)
-                  m = re.sub(r'\s+package="[^"]+"', '', m, count=1)
-                  open(manifest, 'w').write(m)
+          if not matches:
+              sys.exit("ERROR: llamafu was not found in the pub cache.")
 
-          lines = open(gradle).read().split('\n')
-          out = []
-          done = False
-          for line in lines:
-              out.append(line)
-              if not done and re.match(r'^\s*android\s*\{\s*$', line):
-                  out.append("    namespace '%s'" % ns)
-                  done = True
-          if not done:
-              out += ['', 'android {', "    namespace '%s'" % ns, '}']
-          open(gradle, 'w').write('\n'.join(out))
-          print('namespace:', ns, '| inserted into android block:', done)
+          plugin = sorted(matches)[-1]
+          gradle = os.path.join(plugin, "android", "build.gradle")
+
+          if not os.path.isfile(gradle):
+              sys.exit("ERROR: llamafu Android build.gradle was not found.")
+
+          with open(gradle, encoding="utf-8") as f:
+              content = f.read()
+
+          namespace = "com.llamafu.llamafu"
+
+          if re.search(r'\bnamespace\s*[=( ]', content):
+              print("llamafu already declares a namespace.")
+          else:
+              pattern = r'(?m)^([ \t]*)android[ \t]*\{'
+              updated, count = re.subn(
+                  pattern,
+                  lambda m: (
+                      m.group(0)
+                      + "\n"
+                      + m.group(1)
+                      + "    namespace '"
+                      + namespace
+                      + "'"
+                  ),
+                  content,
+                  count=1,
+              )
+
+              if count == 0:
+                  sys.exit(
+                      "ERROR: Could not find android { in llamafu/build.gradle."
+                  )
+
+              with open(gradle, "w", encoding="utf-8") as f:
+                  f.write(updated)
+
+              print("Added namespace:", namespace)
+              print("Patched:", gradle)
           PY
-          mkdir -p $HOME/.gradle/init.d
-          cat > $HOME/.gradle/init.d/namespace.gradle <<'EOF'
-          allprojects {
-              afterEvaluate { }
-              plugins.withId('com.android.library') {
-                  if (project.name == 'llamafu') {
-                      def ext = project.extensions.findByName('android')
-                      if (ext != null && !ext.namespace) {
-                          ext.namespace = 'com.llamafu.llamafu'
-                      }
-                  }
-              }
-          }
-          EOF
 
-      - name: Build APK
-        run: |
-          flutter build apk --release || {
-            echo "=========== LLAMAFU build.gradle ==========="
-            cat -n $(ls -d $HOME/.pub-cache/hosted/pub.dev/llamafu-* | head -1)/android/build.gradle
-            exit 1
-          }
+      - name: Build release APK
+        run: flutter build apk --release
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
         with:
           name: rui-apk
           path: rui/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+```
