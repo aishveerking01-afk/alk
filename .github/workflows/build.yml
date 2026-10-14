@@ -26,15 +26,14 @@ jobs:
         with:
           channel: stable
 
-      - name: Generate Android project
+      - name: Check project
         working-directory: rui
-        run: flutter create --org com.rui --project-name rui --platforms android .
+        run: |
+          test -f pubspec.yaml
+          flutter create --org com.rui --project-name rui --platforms android .
+          cp manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
 
-      - name: Apply Rui manifest
-        working-directory: rui
-        run: cp manifest/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
-
-      - name: Set minSdk
+      - name: Set minimum SDK
         working-directory: rui
         run: sed -i 's/flutter.minSdkVersion/24/g' android/app/build.gradle*
 
@@ -43,61 +42,58 @@ jobs:
         run: flutter pub get
 
       - name: Fix llamafu namespace
+        working-directory: rui
         shell: bash
         run: |
           set -e
-          FILE="rui/.dart_tool/package_config.json"
-          python3 - <<'PY'
-          import json
-          import os
-          import sys
+          FILE=$(find "$HOME/.pub-cache/hosted" \
+            -path '*/llamafu-*/android/build.gradle' \
+            -print -quit)
 
-          with open("rui/.dart_tool/package_config.json", encoding="utf-8") as f:
-              config = json.load(f)
+          if [ -z "$FILE" ]; then
+            echo "ERROR: llamafu Gradle file not found"
+            exit 1
+          fi
 
-          package = next((p for p in config["packages"] if p["name"] == "llamafu"), None)
-          if package is None:
-              sys.exit("ERROR: llamafu is not in package_config.json")
+          echo "Patching $FILE"
 
-          root_uri = package["rootUri"]
-          if root_uri.startswith("file:"):
-              from urllib.parse import urlparse, unquote
-              root = unquote(urlparse(root_uri).path)
-          else:
-              root = os.path.normpath(os.path.join("rui/.dart_tool", root_uri))
+          python3 - "$FILE" <<'PY'
+          import re, sys
 
-          gradle = os.path.join(root, "android", "build.gradle")
-          if not os.path.isfile(gradle):
-              sys.exit("ERROR: Plugin Gradle file not found: " + gradle)
+          path = sys.argv[1]
+          with open(path, encoding="utf-8") as f:
+              text = f.read()
 
-          with open(gradle, encoding="utf-8") as f:
-              content = f.read()
-
-          import re
-          if not re.search(r'(?m)^\s*namespace\s+', content):
-              content, count = re.subn(
-                  r'(?m)^(\s*)android\s*\{',
-                  r"\1android {\n\1    namespace 'com.llamafu.llamafu'",
-                  content,
-                  count=1
+          if not re.search(r'(?m)^\s*namespace\s+', text):
+              text, count = re.subn(
+                  r'(?m)^([ \t]*)android\s*\{',
+                  lambda m: m.group(0) + "\n" + m.group(1) +
+                            "    namespace 'com.llamafu.llamafu'",
+                  text, count=1
               )
               if count != 1:
-                  sys.exit("ERROR: Could not insert namespace into " + gradle)
-              with open(gradle, "w", encoding="utf-8") as f:
-                  f.write(content)
+                  sys.exit("ERROR: Could not locate android { block")
 
-          print("Patched plugin:", gradle)
-          print("Namespace:", "com.llamafu.llamafu")
+              with open(path, "w", encoding="utf-8") as f:
+                  f.write(text)
+
+          with open(path, encoding="utf-8") as f:
+              text = f.read()
+
+          if not re.search(r'(?m)^\s*namespace\s+', text):
+              sys.exit("ERROR: Namespace insertion failed")
+
+          print("Namespace verified: com.llamafu.llamafu")
           PY
 
-      - name: Build release APK
+      - name: Build APK
         working-directory: rui
         run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: rui-apk
+          name: Rui-APK
           path: rui/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 ```
