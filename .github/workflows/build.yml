@@ -32,6 +32,9 @@ jobs:
       - name: Set minSdk to 24
         run: sed -i 's/flutter.minSdkVersion/24/' android/app/build.gradle*
 
+      - name: Define kotlin_version for llamafu
+        run: echo "kotlin_version=2.1.0" >> android/gradle.properties
+
       - run: flutter pub get
 
       - run: flutter build apk --release
