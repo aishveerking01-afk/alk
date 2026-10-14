@@ -1,3 +1,4 @@
+
 name: Build New Rui APK
 
 on:
@@ -29,19 +30,17 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Install required CMake
-        shell: bash
-        run: |
-          set -e
-          sdkmanager --install "cmake;3.18.1"
-          sdkmanager --list_installed | grep "cmake;3.18.1"
+        with:
+          packages: |
+            cmake;3.18.1
+          accept-android-sdk-licenses: true
 
       - name: Repair Android project
         working-directory: rui
         shell: bash
         run: |
           set -e
+
           if [ ! -f android/app/build.gradle ] && [ ! -f android/app/build.gradle.kts ]; then
             rm -rf android
             flutter create --platforms=android --org com.aishveer.rui .
@@ -74,11 +73,13 @@ jobs:
                       text,
                       count=1
                   )
+
                   if count == 0:
                       raise SystemExit("Could not add llamafu namespace")
 
               text = re.sub(r'\$kotlin_version\b', '1.9.24', text)
               text = re.sub(r'\bkotlin_version\b', "'1.9.24'", text)
+
               file.write_text(text)
               print("Patched:", file)
           PY
@@ -102,7 +103,9 @@ jobs:
           elif new in text:
               print("Prompt argument already fixed.")
           else:
-              raise SystemExit("Could not find multimodalComplete call.")
+              raise SystemExit(
+                  "Could not find multimodalComplete call in lib/main.dart"
+              )
           PY
 
       - name: Build release APK
